@@ -391,6 +391,7 @@
     border-top: 1px dashed var(--line);
   }
   .session-result strong { color: var(--ink); }
+  .session-result .break-line { color: #b5761f; }
 
   .notes-row { margin-top: 10px; }
   .notes-row label {
@@ -656,6 +657,13 @@ function nowTimeStr() {
   return `${hh}:${mm}`;
 }
 
+function timeStrFromTimestamp(ts) {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 function fmtElapsed(ms) {
   const totalSec = Math.floor(ms / 1000);
   const h = Math.floor(totalSec / 3600);
@@ -730,6 +738,7 @@ function parseSummaryText(text) {
 
   const sessionTimeRe = /^(.+?) \((.+?)\): (.+?)–(.+?) → .+$/;
   const sessionNoTimeRe = /^(.+?): \(no time logged\)$/;
+  const breakRe = /^\s+break:\s*(.+?)–(.+)$/;
   const noteRe = /^\s+note:\s*(.+)$/;
   const totalRe = /^Total:.*@\s*\$([\d.]+)\/hr\s*=/;
 
@@ -749,6 +758,14 @@ function parseSummaryText(text) {
       continue;
     }
 
+    const breakMatch = line.match(breakRe);
+    if (breakMatch && lastSession) {
+      const bStart = parseTime12(breakMatch[1]);
+      const bEnd = parseTime12(breakMatch[2]);
+      if (bStart && bEnd) lastSession.breaks.push({ start: bStart, end: bEnd });
+      continue;
+    }
+
     const timeMatch = line.match(sessionTimeRe);
     if (timeMatch) {
       const [, label, dateStr, startStr, endStr] = timeMatch;
@@ -758,6 +775,7 @@ function parseSummaryText(text) {
         start: parseTime12(startStr),
         end: parseTime12(endStr),
         notes: '',
+        breaks: [],
       };
       sessions.push(sess);
       lastSession = sess;
@@ -766,7 +784,7 @@ function parseSummaryText(text) {
 
     const noTimeMatch = line.match(sessionNoTimeRe);
     if (noTimeMatch) {
-      const sess = { label: noTimeMatch[1].trim(), date: '', start: '', end: '', notes: '' };
+      const sess = { label: noTimeMatch[1].trim(), date: '', start: '', end: '', notes: '', breaks: [] };
       sessions.push(sess);
       lastSession = sess;
       continue;
@@ -818,8 +836,8 @@ function App() {
   const [rate, setRate] = useState(() => (saved && typeof saved.rate === 'number') ? saved.rate : 50);
   const [floorRate, setFloorRate] = useState(() => (saved && typeof saved.floorRate === 'number') ? saved.floorRate : 40);
   const [sessions, setSessions] = useState(() => (saved && Array.isArray(saved.sessions) && saved.sessions.length > 0) ? saved.sessions : [
-    { id: 1, label: 'Shoot', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breakMs: 0 },
-    { id: 2, label: 'Edit — session 1', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breakMs: 0 },
+    { id: 1, label: 'Shoot', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] },
+    { id: 2, label: 'Edit — session 1', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] },
   ]);
   const [nextId, setNextId] = useState(() => (saved && typeof saved.nextId === 'number') ? saved.nextId : 3);
   const [copied, setCopied] = useState(false);
@@ -849,15 +867,15 @@ function App() {
     setSessions(prev => prev.map(s => {
       if (s.id !== id) return s;
       if (s.runningSince) {
-        // punching out — close out any active break first
-        let finalBreakMs = s.breakMs || 0;
+        // punching out — close out any active break first, recording its time range
+        let breaks = s.breaks || [];
         if (s.onBreak && s.breakStart) {
-          finalBreakMs += Date.now() - s.breakStart;
+          breaks = [...breaks, { start: timeStrFromTimestamp(s.breakStart), end: nowTimeStr() }];
         }
-        return { ...s, end: nowTimeStr(), runningSince: null, onBreak: false, breakStart: null, breakMs: finalBreakMs };
+        return { ...s, end: nowTimeStr(), runningSince: null, onBreak: false, breakStart: null, breaks };
       }
       // punching in
-      return { ...s, start: nowTimeStr(), end: '', runningSince: Date.now(), date: todayStr(), onBreak: false, breakStart: null, breakMs: 0 };
+      return { ...s, start: nowTimeStr(), end: '', runningSince: Date.now(), date: todayStr(), onBreak: false, breakStart: null, breaks: [] };
     }));
   };
 
@@ -865,9 +883,10 @@ function App() {
     setSessions(prev => prev.map(s => {
       if (s.id !== id || !s.runningSince) return s;
       if (s.onBreak) {
-        // resume — add elapsed break time
-        const addedMs = s.breakStart ? Date.now() - s.breakStart : 0;
-        return { ...s, onBreak: false, breakStart: null, breakMs: (s.breakMs || 0) + addedMs };
+        // resume — record this break as a completed time range
+        const breakEnd = nowTimeStr();
+        const breakStart = s.breakStart ? timeStrFromTimestamp(s.breakStart) : breakEnd;
+        return { ...s, onBreak: false, breakStart: null, breaks: [...(s.breaks || []), { start: breakStart, end: breakEnd }] };
       }
       // start break
       return { ...s, onBreak: true, breakStart: Date.now() };
@@ -876,7 +895,7 @@ function App() {
 
   const handleClear = (id) => {
     setSessions(prev => prev.map(s => s.id === id
-      ? { ...s, start: '', end: '', runningSince: null, onBreak: false, breakStart: null, breakMs: 0 }
+      ? { ...s, start: '', end: '', runningSince: null, onBreak: false, breakStart: null, breaks: [] }
       : s
     ));
   };
@@ -886,7 +905,7 @@ function App() {
   };
 
   const addSession = () => {
-    setSessions(prev => [...prev, { id: nextId, label: `Edit — session ${prev.length}`, start: '', end: '', runningSince: null, date: todayStr(), notes: '', onBreak: false, breakStart: null, breakMs: 0 }]);
+    setSessions(prev => [...prev, { id: nextId, label: `Edit — session ${prev.length}`, start: '', end: '', runningSince: null, date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] }]);
     setNextId(n => n + 1);
   };
 
@@ -896,11 +915,11 @@ function App() {
 
   const computed = useMemo(() => {
     return sessions.map(s => {
-      let raw = diffHours(s.start, s.end);
-      const breakHours = (s.breakMs || 0) / 3600000;
-      raw = Math.max(0, raw - breakHours);
+      const fullShiftRaw = diffHours(s.start, s.end);
+      const breakHours = (s.breaks || []).reduce((sum, b) => sum + diffHours(b.start, b.end), 0);
+      const raw = Math.max(0, fullShiftRaw - breakHours);
       const rounded = raw > 0 ? round(raw) : 0;
-      return { ...s, raw, rounded };
+      return { ...s, fullShiftRaw, breakHours, raw, rounded };
     });
   }, [sessions]);
 
@@ -915,6 +934,9 @@ function App() {
     computed.forEach(s => {
       if (s.raw > 0) {
         lines.push(`${s.label} (${s.date || 'no date'}): ${fmt12Hour(s.start)}–${fmt12Hour(s.end)} → ${fmtHours(s.rounded)}`);
+        (s.breaks || []).forEach(b => {
+          lines.push(`   break: ${fmt12Hour(b.start)}–${fmt12Hour(b.end)}`);
+        });
         if (s.notes) lines.push(`   note: ${s.notes}`);
       } else {
         lines.push(`${s.label}: (no time logged)`);
@@ -974,7 +996,7 @@ function App() {
       runningSince: null,
       onBreak: false,
       breakStart: null,
-      breakMs: 0,
+      breaks: s.breaks || [],
     }));
     setSessions(newSessions);
     setNextId(id => id + result.sessions.length);
@@ -1003,39 +1025,43 @@ function App() {
   const buildStyledExcel = () => {
     const accent = '#ABB1FF';
     const ink = '#1c1a17';
-    const rowsHTML = computed.map(s => `
+    const rowsHTML = computed.map(s => {
+      const breakText = (s.breaks || []).map(b => `${fmt12Hour(b.start)}–${fmt12Hour(b.end)}`).join('; ');
+      return `
       <tr>
         <td>${escapeHTML(s.label)}</td>
         <td>${escapeHTML(s.date || '')}</td>
         <td>${escapeHTML(s.start ? fmt12Hour(s.start) : '')}</td>
         <td>${escapeHTML(s.end ? fmt12Hour(s.end) : '')}</td>
+        <td style="color:#b5761f;">${escapeHTML(breakText)}</td>
         <td align="right">${s.raw > 0 ? s.rounded : ''}</td>
         <td style="color:#6b655a;font-style:italic;">${escapeHTML(s.notes || '')}</td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
 
     return `
       <html>
       <head><meta charset="UTF-8"></head>
       <body style="font-family:Calibri, Arial, sans-serif;">
         <table border="0" cellspacing="0" cellpadding="6">
-          <tr><td style="font-size:16px;font-weight:bold;color:${ink};" colspan="6">${escapeHTML(projectTitle || 'Untitled Project')}</td></tr>
-          <tr><td style="font-weight:bold;">Invoice #</td><td colspan="5">${escapeHTML(invoiceNumber)}</td></tr>
-          <tr><td style="font-weight:bold;">Billed To</td><td colspan="5">${escapeHTML(billedTo || '')}</td></tr>
-          <tr><td style="font-weight:bold;">Invoice Date</td><td colspan="5">${escapeHTML(projectDate || todayStr())}</td></tr>
-          <tr><td colspan="6"></td></tr>
+          <tr><td style="font-size:16px;font-weight:bold;color:${ink};" colspan="7">${escapeHTML(projectTitle || 'Untitled Project')}</td></tr>
+          <tr><td style="font-weight:bold;">Invoice #</td><td colspan="6">${escapeHTML(invoiceNumber)}</td></tr>
+          <tr><td style="font-weight:bold;">Billed To</td><td colspan="6">${escapeHTML(billedTo || '')}</td></tr>
+          <tr><td style="font-weight:bold;">Invoice Date</td><td colspan="6">${escapeHTML(projectDate || todayStr())}</td></tr>
+          <tr><td colspan="7"></td></tr>
           <tr style="background:${accent};color:${ink};font-weight:bold;">
-            <td>Session</td><td>Date Worked</td><td>Start</td><td>End</td><td align="right">Rounded Hours</td><td>Notes</td>
+            <td>Session</td><td>Date Worked</td><td>Start</td><td>End</td><td>Break</td><td align="right">Rounded Hours</td><td>Notes</td>
           </tr>
           ${rowsHTML}
-          <tr><td colspan="6"></td></tr>
+          <tr><td colspan="7"></td></tr>
           <tr style="font-weight:bold;">
-            <td colspan="4">TOTAL</td>
+            <td colspan="5">TOTAL</td>
             <td align="right">${totalRounded}</td>
             <td></td>
           </tr>
-          <tr><td colspan="4">Rate</td><td align="right">$${rate}/hr</td><td></td></tr>
+          <tr><td colspan="5">Rate</td><td align="right">$${rate}/hr</td><td></td></tr>
           <tr style="background:${accent};color:${ink};font-weight:bold;font-size:14px;">
-            <td colspan="4">TOTAL COST</td><td align="right">$${totalCost.toFixed(0)}</td><td></td>
+            <td colspan="5">TOTAL COST</td><td align="right">$${totalCost.toFixed(0)}</td><td></td>
           </tr>
         </table>
       </body>
@@ -1209,8 +1235,8 @@ function App() {
     setRate(50);
     setFloorRate(40);
     setSessions([
-      { id: 1, label: 'Shoot', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breakMs: 0 },
-      { id: 2, label: 'Edit — session 1', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breakMs: 0 },
+      { id: 1, label: 'Shoot', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] },
+      { id: 2, label: 'Edit — session 1', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] },
     ]);
     setNextId(3);
     try { localStorage.removeItem('shootTrackerFormState'); } catch (e) { /* ignore */ }
@@ -1365,7 +1391,9 @@ function App() {
             </div>
           </div>
           {s.runningSince && !s.onBreak && (
-            <div className="punch-live">{fmtElapsed(now - s.runningSince - (s.breakMs || 0))} elapsed</div>
+            <div className="punch-live">
+              {fmtElapsed(now - s.runningSince - ((s.breaks || []).reduce((sum, b) => sum + diffHours(b.start, b.end), 0) * 3600000))} elapsed
+            </div>
           )}
           {s.runningSince && s.onBreak && (
             <div className="break-live">on break — {fmtElapsed(now - s.breakStart)}</div>
@@ -1380,9 +1408,14 @@ function App() {
               <input type="time" value={s.end} onChange={e => updateSession(s.id, 'end', e.target.value)} />
             </div>
           </div>
-          {s.raw > 0 && (
+          {s.start && s.end && (
             <div className="session-result">
               {fmt12Hour(s.start)} – {fmt12Hour(s.end)}<br/>
+              {(s.breaks || []).map((b, i) => (
+                <React.Fragment key={i}>
+                  <span className="break-line">− break: {fmt12Hour(b.start)} – {fmt12Hour(b.end)}</span><br/>
+                </React.Fragment>
+              ))}
               Raw: {s.raw.toFixed(2)} hr → Rounded: <strong>{fmtHours(s.rounded)}</strong>
             </div>
           )}
