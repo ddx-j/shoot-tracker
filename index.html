@@ -301,6 +301,28 @@
     text-decoration: underline;
     padding: 0;
   }
+  .tag-row {
+    margin-bottom: 10px;
+  }
+  .tag-select {
+    font-family: var(--mono);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 5px 8px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--paper);
+    color: #8a8375;
+    cursor: pointer;
+    max-width: 100%;
+  }
+  .tag-select.tagged {
+    border: 1px solid var(--tape);
+    background: var(--tape-dim);
+    color: var(--ink);
+    font-weight: bold;
+  }
   .date-actions-row {
     display: flex;
     flex-wrap: wrap;
@@ -495,6 +517,21 @@
   }
   .add-btn:hover { border-color: var(--tape); color: var(--tape); }
 
+  .project-tally {
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    background: #fff;
+  }
+  .project-tally-row {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 14px;
+    padding: 5px 0;
+    color: var(--ink);
+  }
   .total-card {
     border: 2px solid var(--ink);
     border-radius: 4px;
@@ -527,6 +564,22 @@
     line-height: 1.6;
   }
 
+  .split-invoice-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: #6b655a;
+    margin-bottom: 14px;
+    cursor: pointer;
+  }
+  .split-invoice-row input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--tape);
+    flex-shrink: 0;
+  }
   .export-row {
     display: flex;
     flex-wrap: wrap;
@@ -710,6 +763,12 @@ function parseTime12(str) {
   return `${String(h).padStart(2, '0')}:${min}`;
 }
 
+function splitLabelTag(rawLabel) {
+  const m = rawLabel.match(/^(.*) \[(.+)\]$/);
+  if (m) return { label: m[1].trim(), tag: m[2].trim() };
+  return { label: rawLabel.trim(), tag: '' };
+}
+
 function parseSummaryText(text) {
   const lines = text.replace(/\r\n/g, '\n').split('\n').map(l => l.replace(/\s+$/, ''));
   let idx = 0;
@@ -768,14 +827,16 @@ function parseSummaryText(text) {
 
     const timeMatch = line.match(sessionTimeRe);
     if (timeMatch) {
-      const [, label, dateStr, startStr, endStr] = timeMatch;
+      const [, rawLabel, dateStr, startStr, endStr] = timeMatch;
+      const { label, tag } = splitLabelTag(rawLabel);
       const sess = {
-        label: label.trim(),
+        label,
         date: dateStr.trim() === 'no date' ? '' : dateStr.trim(),
         start: parseTime12(startStr),
         end: parseTime12(endStr),
         notes: '',
         breaks: [],
+        tag,
       };
       sessions.push(sess);
       lastSession = sess;
@@ -784,7 +845,8 @@ function parseSummaryText(text) {
 
     const noTimeMatch = line.match(sessionNoTimeRe);
     if (noTimeMatch) {
-      const sess = { label: noTimeMatch[1].trim(), date: '', start: '', end: '', notes: '', breaks: [] };
+      const { label, tag } = splitLabelTag(noTimeMatch[1]);
+      const sess = { label, date: '', start: '', end: '', notes: '', breaks: [], tag };
       sessions.push(sess);
       lastSession = sess;
       continue;
@@ -836,10 +898,12 @@ function App() {
   const [rate, setRate] = useState(() => (saved && typeof saved.rate === 'number') ? saved.rate : 50);
   const [floorRate, setFloorRate] = useState(() => (saved && typeof saved.floorRate === 'number') ? saved.floorRate : 40);
   const [sessions, setSessions] = useState(() => (saved && Array.isArray(saved.sessions) && saved.sessions.length > 0) ? saved.sessions : [
-    { id: 1, label: 'Shoot', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] },
-    { id: 2, label: 'Edit — session 1', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] },
+    { id: 1, label: 'Shoot', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [], tag: '' },
+    { id: 2, label: 'Edit — session 1', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [], tag: '' },
   ]);
   const [nextId, setNextId] = useState(() => (saved && typeof saved.nextId === 'number') ? saved.nextId : 3);
+  const [projectTags, setProjectTags] = useState(() => (saved && Array.isArray(saved.projectTags)) ? saved.projectTags : []);
+  const [splitInvoiceByProject, setSplitInvoiceByProject] = useState(false);
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [showImport, setShowImport] = useState(false);
@@ -856,12 +920,12 @@ function App() {
 
   useEffect(() => {
     try {
-      const toSave = { projectTitle, projectDate, billedTo, rate, floorRate, sessions, nextId };
+      const toSave = { projectTitle, projectDate, billedTo, rate, floorRate, sessions, nextId, projectTags };
       localStorage.setItem('shootTrackerFormState', JSON.stringify(toSave));
     } catch (e) {
       // storage unavailable or full — fail silently, nothing to recover here
     }
-  }, [projectTitle, projectDate, billedTo, rate, floorRate, sessions, nextId]);
+  }, [projectTitle, projectDate, billedTo, rate, floorRate, sessions, nextId, projectTags]);
 
   const handlePunch = (id) => {
     setSessions(prev => prev.map(s => {
@@ -875,7 +939,7 @@ function App() {
         return { ...s, end: nowTimeStr(), runningSince: null, onBreak: false, breakStart: null, breaks };
       }
       // punching in
-      return { ...s, start: nowTimeStr(), end: '', runningSince: Date.now(), date: todayStr(), onBreak: false, breakStart: null, breaks: [] };
+      return { ...s, start: nowTimeStr(), end: '', runningSince: Date.now(), date: todayStr(), onBreak: false, breakStart: null, breaks: [], tag: '' };
     }));
   };
 
@@ -904,8 +968,20 @@ function App() {
     setSessions(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
   };
 
+  const handleAssignTag = (sessionId, value) => {
+    if (value === '__new__') {
+      const name = window.prompt('Name this project:');
+      if (!name || !name.trim()) return;
+      const trimmed = name.trim();
+      setProjectTags(prev => prev.includes(trimmed) ? prev : [...prev, trimmed]);
+      updateSession(sessionId, 'tag', trimmed);
+      return;
+    }
+    updateSession(sessionId, 'tag', value);
+  };
+
   const addSession = () => {
-    setSessions(prev => [...prev, { id: nextId, label: `Edit — session ${prev.length}`, start: '', end: '', runningSince: null, date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] }]);
+    setSessions(prev => [...prev, { id: nextId, label: `Edit — session ${prev.length}`, start: '', end: '', runningSince: null, date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [], tag: '' }]);
     setNextId(n => n + 1);
   };
 
@@ -926,22 +1002,53 @@ function App() {
   const totalRounded = computed.reduce((sum, s) => sum + s.rounded, 0);
   const totalCost = totalRounded * rate;
 
+  const byProjectTally = useMemo(() => {
+    const groups = {};
+    computed.forEach(s => {
+      if (s.raw <= 0) return;
+      const key = s.tag || '';
+      if (!groups[key]) groups[key] = 0;
+      groups[key] += s.raw;
+    });
+    const order = [...projectTags, ''];
+    return order
+      .filter(key => groups[key] !== undefined)
+      .map(key => {
+        const rawTotal = groups[key];
+        const rounded = round(rawTotal);
+        return {
+          tag: key || 'Untagged',
+          rawTotal,
+          rounded,
+          cost: rounded * rate,
+        };
+      });
+  }, [computed, projectTags, rate]);
+
   const buildSummary = () => {
     const lines = [];
     lines.push(projectTitle ? projectTitle : 'Untitled Project');
     lines.push(fmtExportTitle(projectDate, invoiceNumber, projectTitle));
     lines.push('');
     computed.forEach(s => {
+      const labelWithTag = s.tag ? `${s.label} [${s.tag}]` : s.label;
       if (s.raw > 0) {
-        lines.push(`${s.label} (${s.date || 'no date'}): ${fmt12Hour(s.start)}–${fmt12Hour(s.end)} → ${fmtHours(s.rounded)}`);
+        lines.push(`${labelWithTag} (${s.date || 'no date'}): ${fmt12Hour(s.start)}–${fmt12Hour(s.end)} → ${fmtHours(s.rounded)}`);
         (s.breaks || []).forEach(b => {
           lines.push(`   break: ${fmt12Hour(b.start)}–${fmt12Hour(b.end)}`);
         });
         if (s.notes) lines.push(`   note: ${s.notes}`);
       } else {
-        lines.push(`${s.label}: (no time logged)`);
+        lines.push(`${labelWithTag}: (no time logged)`);
       }
     });
+    if (byProjectTally.some(g => g.tag !== 'Untagged')) {
+      lines.push('');
+      lines.push('By Project:');
+      byProjectTally.forEach(g => {
+        lines.push(`   ${g.tag}: ${fmtHours(g.rounded)} @ $${rate}/hr = $${g.cost.toFixed(0)}`);
+      });
+    }
     lines.push('');
     lines.push(`Total: ${fmtHours(totalRounded)} @ $${rate}/hr = $${totalCost.toFixed(0)}`);
     return lines.join('\n');
@@ -997,9 +1104,15 @@ function App() {
       onBreak: false,
       breakStart: null,
       breaks: s.breaks || [],
+      tag: s.tag || '',
     }));
     setSessions(newSessions);
     setNextId(id => id + result.sessions.length);
+
+    const importedTags = [...new Set(newSessions.map(s => s.tag).filter(Boolean))];
+    if (importedTags.length > 0) {
+      setProjectTags(prev => [...new Set([...prev, ...importedTags])]);
+    }
 
     if (result.invoiceNumber && result.invoiceNumber !== invoiceNumber) {
       const setInv = window.confirm(
@@ -1030,6 +1143,7 @@ function App() {
       return `
       <tr>
         <td>${escapeHTML(s.label)}</td>
+        <td>${escapeHTML(s.tag || '')}</td>
         <td>${escapeHTML(s.date || '')}</td>
         <td>${escapeHTML(s.start ? fmt12Hour(s.start) : '')}</td>
         <td>${escapeHTML(s.end ? fmt12Hour(s.end) : '')}</td>
@@ -1039,29 +1153,42 @@ function App() {
       </tr>`;
     }).join('');
 
+    const hasProjectTags = byProjectTally.some(g => g.tag !== 'Untagged');
+    const byProjectHTML = hasProjectTags ? `
+          <tr><td colspan="8"></td></tr>
+          <tr style="font-weight:bold;"><td colspan="8">By Project</td></tr>
+          ${byProjectTally.map(g => `
+          <tr>
+            <td colspan="5">${escapeHTML(g.tag)}</td>
+            <td align="right">${g.rounded}</td>
+            <td></td>
+            <td align="right">$${g.cost.toFixed(0)}</td>
+          </tr>`).join('')}` : '';
+
     return `
       <html>
       <head><meta charset="UTF-8"></head>
       <body style="font-family:Calibri, Arial, sans-serif;">
         <table border="0" cellspacing="0" cellpadding="6">
-          <tr><td style="font-size:16px;font-weight:bold;color:${ink};" colspan="7">${escapeHTML(projectTitle || 'Untitled Project')}</td></tr>
-          <tr><td style="font-weight:bold;">Invoice #</td><td colspan="6">${escapeHTML(invoiceNumber)}</td></tr>
-          <tr><td style="font-weight:bold;">Billed To</td><td colspan="6">${escapeHTML(billedTo || '')}</td></tr>
-          <tr><td style="font-weight:bold;">Invoice Date</td><td colspan="6">${escapeHTML(projectDate || todayStr())}</td></tr>
-          <tr><td colspan="7"></td></tr>
+          <tr><td style="font-size:16px;font-weight:bold;color:${ink};" colspan="8">${escapeHTML(projectTitle || 'Untitled Project')}</td></tr>
+          <tr><td style="font-weight:bold;">Invoice #</td><td colspan="7">${escapeHTML(invoiceNumber)}</td></tr>
+          <tr><td style="font-weight:bold;">Billed To</td><td colspan="7">${escapeHTML(billedTo || '')}</td></tr>
+          <tr><td style="font-weight:bold;">Invoice Date</td><td colspan="7">${escapeHTML(projectDate || todayStr())}</td></tr>
+          <tr><td colspan="8"></td></tr>
           <tr style="background:${accent};color:${ink};font-weight:bold;">
-            <td>Session</td><td>Date Worked</td><td>Start</td><td>End</td><td>Break</td><td align="right">Rounded Hours</td><td>Notes</td>
+            <td>Session</td><td>Project</td><td>Date Worked</td><td>Start</td><td>End</td><td>Break</td><td align="right">Rounded Hours</td><td>Notes</td>
           </tr>
           ${rowsHTML}
-          <tr><td colspan="7"></td></tr>
+          ${byProjectHTML}
+          <tr><td colspan="8"></td></tr>
           <tr style="font-weight:bold;">
-            <td colspan="5">TOTAL</td>
+            <td colspan="6">TOTAL</td>
             <td align="right">${totalRounded}</td>
             <td></td>
           </tr>
-          <tr><td colspan="5">Rate</td><td align="right">$${rate}/hr</td><td></td></tr>
+          <tr><td colspan="6">Rate</td><td align="right">$${rate}/hr</td><td></td></tr>
           <tr style="background:${accent};color:${ink};font-weight:bold;font-size:14px;">
-            <td colspan="5">TOTAL COST</td><td align="right">$${totalCost.toFixed(0)}</td><td></td>
+            <td colspan="6">TOTAL COST</td><td align="right">$${totalCost.toFixed(0)}</td><td></td>
           </tr>
         </table>
       </body>
@@ -1167,17 +1294,48 @@ function App() {
     doc.setFontSize(11);
     doc.text(billedTo || '—', margin, 126);
 
+    const useSplit = splitInvoiceByProject && byProjectTally.some(g => g.tag !== 'Untagged');
     const tableRows = [];
-    computed.filter(s => s.raw > 0).forEach(s => {
-      tableRows.push([
-        s.date || '',
-        s.label,
-        s.notes || '',
-        fmtHours(s.rounded),
-        `$${rate}/hr`,
-        `$${(s.rounded * rate).toFixed(0)}`,
-      ]);
-    });
+
+    if (useSplit) {
+      const groupOrder = [...projectTags, ''];
+      groupOrder.forEach(tagKey => {
+        const groupSessions = computed.filter(s => s.raw > 0 && (s.tag || '') === tagKey);
+        if (groupSessions.length === 0) return;
+        const displayName = tagKey || 'Other';
+        tableRows.push([{ content: displayName, colSpan: 6, styles: { fillColor: accent, textColor: ink, fontStyle: 'bold' } }]);
+        groupSessions.forEach(s => {
+          tableRows.push([
+            s.date || '',
+            s.label,
+            s.notes || '',
+            fmtHours(s.rounded),
+            `$${rate}/hr`,
+            `$${(s.rounded * rate).toFixed(0)}`,
+          ]);
+        });
+        const groupTally = byProjectTally.find(g => g.tag === displayName || (tagKey === '' && g.tag === 'Untagged'));
+        const subtotalHours = groupTally ? groupTally.rounded : 0;
+        const subtotalCost = groupTally ? groupTally.cost : 0;
+        tableRows.push([
+          { content: `Subtotal — ${displayName}`, colSpan: 3, styles: { fontStyle: 'bold' } },
+          { content: fmtHours(subtotalHours), styles: { fontStyle: 'bold' } },
+          '',
+          { content: `$${subtotalCost.toFixed(0)}`, styles: { fontStyle: 'bold' } },
+        ]);
+      });
+    } else {
+      computed.filter(s => s.raw > 0).forEach(s => {
+        tableRows.push([
+          s.date || '',
+          s.label,
+          s.notes || '',
+          fmtHours(s.rounded),
+          `$${rate}/hr`,
+          `$${(s.rounded * rate).toFixed(0)}`,
+        ]);
+      });
+    }
 
     doc.autoTable({
       startY: 145,
@@ -1191,6 +1349,9 @@ function App() {
       columnStyles: { 2: { textColor: gray, fontStyle: 'italic' } },
     });
 
+    const footerHours = useSplit ? byProjectTally.reduce((sum, g) => sum + g.rounded, 0) : totalRounded;
+    const footerCost = useSplit ? byProjectTally.reduce((sum, g) => sum + g.cost, 0) : totalCost;
+
     const finalY = doc.lastAutoTable.finalY + 20;
     const boxX = doc.internal.pageSize.getWidth() - margin - 200;
 
@@ -1198,7 +1359,7 @@ function App() {
     doc.setFontSize(11);
     doc.setTextColor(...ink);
     doc.text('Total Hours', boxX, finalY);
-    doc.text(fmtHours(totalRounded), rightX, finalY, { align: 'right' });
+    doc.text(fmtHours(footerHours), rightX, finalY, { align: 'right' });
     doc.text('Rate', boxX, finalY + 16);
     doc.text(`$${rate}/hr`, rightX, finalY + 16, { align: 'right' });
 
@@ -1209,7 +1370,7 @@ function App() {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(15);
     doc.text('Total Due', boxX, finalY + 44);
-    doc.text(`$${totalCost.toFixed(0)}`, rightX, finalY + 44, { align: 'right' });
+    doc.text(`$${footerCost.toFixed(0)}`, rightX, finalY + 44, { align: 'right' });
 
     doc.save(`${fmtExportTitle(projectDate, invoiceNumber, projectTitle)}.pdf`);
     logExport({
@@ -1217,9 +1378,9 @@ function App() {
       project: projectTitle || 'Untitled Project',
       date: projectDate || todayStr(),
       invoiceNum: invoiceNumber,
-      hours: totalRounded,
+      hours: footerHours,
       rate,
-      total: totalCost,
+      total: footerCost,
     });
     finalize();
   };
@@ -1235,10 +1396,12 @@ function App() {
     setRate(50);
     setFloorRate(40);
     setSessions([
-      { id: 1, label: 'Shoot', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] },
-      { id: 2, label: 'Edit — session 1', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [] },
+      { id: 1, label: 'Shoot', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [], tag: '' },
+      { id: 2, label: 'Edit — session 1', start: '', end: '', date: todayStr(), notes: '', onBreak: false, breakStart: null, breaks: [], tag: '' },
     ]);
     setNextId(3);
+    setProjectTags([]);
+    setSplitInvoiceByProject(false);
     try { localStorage.removeItem('shootTrackerFormState'); } catch (e) { /* ignore */ }
   };
 
@@ -1361,6 +1524,19 @@ function App() {
               <button className="remove-btn" onClick={() => removeSession(s.id)}>remove</button>
             )}
           </div>
+          <div className="tag-row">
+            <select
+              className={`tag-select ${s.tag ? 'tagged' : ''}`}
+              value={s.tag || ''}
+              onChange={e => handleAssignTag(s.id, e.target.value)}
+            >
+              <option value="">Untagged</option>
+              {projectTags.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+              <option value="__new__">+ New project…</option>
+            </select>
+          </div>
           <div className="date-actions-row">
             <div className="session-date-field">
               <label>Date worked</label>
@@ -1432,6 +1608,18 @@ function App() {
 
       <button className="add-btn" onClick={addSession}>+ add another session</button>
 
+      {byProjectTally.some(g => g.tag !== 'Untagged') && (
+        <div className="project-tally">
+          <div className="section-label">By Project</div>
+          {byProjectTally.map(g => (
+            <div className="project-tally-row" key={g.tag}>
+              <span>{g.tag}</span>
+              <span>{fmtHours(g.rounded)} · ${g.cost.toFixed(0)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="total-card">
         <div className="total-row">
           <span>Total rounded hours</span>
@@ -1446,6 +1634,17 @@ function App() {
           <span>${totalCost.toFixed(0)}</span>
         </div>
       </div>
+
+      {byProjectTally.some(g => g.tag !== 'Untagged') && (
+        <label className="split-invoice-row">
+          <input
+            type="checkbox"
+            checked={splitInvoiceByProject}
+            onChange={e => setSplitInvoiceByProject(e.target.checked)}
+          />
+          Split PDF invoice by project (subtotals grouped under each project)
+        </label>
+      )}
 
       <div className="export-row">
         <button className={`export-btn ${copied ? 'copied' : ''}`} onClick={handleExport}>
