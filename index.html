@@ -302,26 +302,47 @@
     padding: 0;
   }
   .tag-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
     margin-bottom: 10px;
   }
-  .tag-select {
+  .tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 6px 5px 12px;
+    border-radius: 14px;
     font-family: var(--mono);
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    padding: 5px 8px;
     border: 1px solid var(--line);
-    border-radius: 12px;
     background: var(--paper);
     color: #8a8375;
     cursor: pointer;
-    max-width: 100%;
   }
-  .tag-select.tagged {
+  .tag-chip.active {
     border: 1px solid var(--tape);
     background: var(--tape-dim);
     color: var(--ink);
     font-weight: bold;
+  }
+  .tag-chip.new {
+    padding: 6px 12px;
+    border: 1px dashed var(--line);
+    color: #8a8375;
+    font-weight: normal;
+  }
+  .tag-chip-action {
+    padding: 2px 3px;
+    font-size: 12px;
+    line-height: 1;
+  }
+  .tag-chip-action.delete {
+    color: #a3392f;
+    font-size: 14px;
   }
   .date-actions-row {
     display: flex;
@@ -968,16 +989,42 @@ function App() {
     setSessions(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
   };
 
-  const handleAssignTag = (sessionId, value) => {
-    if (value === '__new__') {
-      const name = window.prompt('Name this project:');
-      if (!name || !name.trim()) return;
-      const trimmed = name.trim();
-      setProjectTags(prev => prev.includes(trimmed) ? prev : [...prev, trimmed]);
+  const handleAddNewTagToSession = (sessionId) => {
+    const name = window.prompt('Name this project:');
+    if (!name || !name.trim()) return;
+    const trimmed = name.trim();
+    if (projectTags.includes(trimmed)) {
       updateSession(sessionId, 'tag', trimmed);
       return;
     }
-    updateSession(sessionId, 'tag', value);
+    setProjectTags(prev => [...prev, trimmed]);
+    updateSession(sessionId, 'tag', trimmed);
+  };
+
+  const handleRenameTag = (oldName) => {
+    const newName = window.prompt('Rename project:', oldName);
+    if (!newName || !newName.trim() || newName.trim() === oldName) return;
+    const trimmed = newName.trim();
+    if (projectTags.includes(trimmed)) {
+      window.alert(`"${trimmed}" already exists as a project.`);
+      return;
+    }
+    setProjectTags(prev => prev.map(t => t === oldName ? trimmed : t));
+    setSessions(prev => prev.map(s => s.tag === oldName ? { ...s, tag: trimmed } : s));
+  };
+
+  const handleDeleteTag = (name) => {
+    const affected = sessions.filter(s => s.tag === name);
+    if (affected.length > 0) {
+      const affectedHours = computed.filter(s => s.tag === name).reduce((sum, s) => sum + s.raw, 0);
+      const ok = window.confirm(
+        `"${name}" is used on ${affected.length} session${affected.length > 1 ? 's' : ''} (about ${affectedHours.toFixed(1)} hr).\n\n` +
+        `Delete this project? Those sessions will become Untagged.`
+      );
+      if (!ok) return;
+    }
+    setProjectTags(prev => prev.filter(t => t !== name));
+    setSessions(prev => prev.map(s => s.tag === name ? { ...s, tag: '' } : s));
   };
 
   const addSession = () => {
@@ -1525,17 +1572,18 @@ function App() {
             )}
           </div>
           <div className="tag-row">
-            <select
-              className={`tag-select ${s.tag ? 'tagged' : ''}`}
-              value={s.tag || ''}
-              onChange={e => handleAssignTag(s.id, e.target.value)}
-            >
-              <option value="">Untagged</option>
-              {projectTags.map(t => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-              <option value="__new__">+ New project…</option>
-            </select>
+            {projectTags.map(t => (
+              <span
+                key={t}
+                className={`tag-chip ${s.tag === t ? 'active' : ''}`}
+                onClick={() => updateSession(s.id, 'tag', s.tag === t ? '' : t)}
+              >
+                {t}
+                <span className="tag-chip-action" onClick={e => { e.stopPropagation(); handleRenameTag(t); }}>✎</span>
+                <span className="tag-chip-action delete" onClick={e => { e.stopPropagation(); handleDeleteTag(t); }}>×</span>
+              </span>
+            ))}
+            <span className="tag-chip new" onClick={() => handleAddNewTagToSession(s.id)}>+ new</span>
           </div>
           <div className="date-actions-row">
             <div className="session-date-field">
